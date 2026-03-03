@@ -1,0 +1,113 @@
+flowchart TB
+    subgraph INTERNET["Internet"]
+        USER["End Users\nmarciobolsoni.cloud"]
+        CF["Amazon CloudFront\n(CDN + WAF)"]
+        R53["Amazon Route 53\n(DNS + Health Checks)"]
+    end
+
+    subgraph VPC["AWS VPC — 10.0.0.0/16"]
+        direction TB
+        subgraph PUB["Public Subnets (AZ-a, AZ-b)"]
+            ALB["Application Load Balancer\n(HTTPS :443)"]
+            NAT["NAT Gateway"]
+        end
+
+        subgraph PRIV["Private Subnets (AZ-a, AZ-b)"]
+            subgraph ECS_CLUSTER["ECS Fargate Cluster"]
+                BLUE["Blue Task Set\n(Current Production)"]
+                GREEN["Green Task Set\n(New Version — Canary)"]
+            end
+        end
+
+        subgraph DATA["Data Subnets (AZ-a, AZ-b)"]
+            RDS["Amazon RDS\n(PostgreSQL — Multi-AZ)"]
+            REDIS["Amazon ElastiCache\n(Redis)"]
+        end
+    end
+
+    subgraph CICD_INFRA["CI/CD Infrastructure"]
+        direction LR
+        ECR["Amazon ECR\n(Container Registry)"]
+        CB["AWS CodeBuild\n(Build & Test)"]
+        CP["AWS CodePipeline\n(Orchestration)"]
+        CD["AWS CodeDeploy\n(Canary Controller)"]
+        CA["AWS CodeArtifact\n(Package Registry)"]
+    end
+
+    subgraph OBSERVABILITY["Observability Stack"]
+        direction LR
+        CW_LOGS["CloudWatch Logs\n(Application & Access Logs)"]
+        CW_METRICS["CloudWatch Metrics\n(Custom + Container Insights)"]
+        CW_ALARMS["CloudWatch Alarms\n(Error Rate / Latency / CPU)"]
+        CW_DASH["CloudWatch Dashboard\n(Deployment Health)"]
+        XRAY["AWS X-Ray\n(Distributed Tracing)"]
+    end
+
+    subgraph SECURITY["Security & Secrets"]
+        direction LR
+        SM["AWS Secrets Manager\n(App Secrets)"]
+        KMS["AWS KMS\n(Encryption Keys)"]
+        IAM["IAM Roles & Policies\n(OIDC + Task Roles)"]
+        WAF["AWS WAF\n(Web ACL)"]
+    end
+
+    subgraph STORAGE["Storage & State"]
+        S3_ART["S3 — Artifacts\n(Build Outputs)"]
+        S3_TF["S3 — Terraform State\n(Remote Backend)"]
+        DDB["DynamoDB\n(State Lock Table)"]
+    end
+
+    subgraph NOTIFY["Notifications"]
+        SNS["AWS SNS Topic\n(Deployment Events)"]
+        SLACK_W["Slack Webhook"]
+        EMAIL_A["Email Alerts"]
+    end
+
+    USER --> CF
+    CF --> WAF
+    WAF --> R53
+    R53 --> ALB
+    ALB -->|"10% (Canary)"| GREEN
+    ALB -->|"90% (Stable)"| BLUE
+    BLUE --> RDS
+    GREEN --> RDS
+    BLUE --> REDIS
+    GREEN --> REDIS
+    BLUE --> SM
+    GREEN --> SM
+    PRIV --> NAT
+
+    ECR --> CB
+    CB --> CP
+    CP --> CD
+    CD --> ALB
+    CD --> CW_ALARMS
+    CW_ALARMS -->|breach| CD
+    CD --> SNS
+    SNS --> SLACK_W
+    SNS --> EMAIL_A
+
+    ECS_CLUSTER --> CW_LOGS
+    ECS_CLUSTER --> CW_METRICS
+    ECS_CLUSTER --> XRAY
+    CW_METRICS --> CW_ALARMS
+    CW_ALARMS --> CW_DASH
+
+    S3_TF --> DDB
+    IAM --> ECS_CLUSTER
+    IAM --> CICD_INFRA
+    KMS --> ECR
+    KMS --> S3_ART
+    KMS --> SM
+
+    style INTERNET fill:#1e3a5f,color:#fff,stroke:#4a90d9
+    style VPC fill:#0f2027,color:#fff,stroke:#4a90d9
+    style PUB fill:#1a3a5c,color:#fff,stroke:#4a90d9
+    style PRIV fill:#1b3a2f,color:#fff,stroke:#52b788
+    style DATA fill:#2d1b4e,color:#fff,stroke:#a855f7
+    style ECS_CLUSTER fill:#2d4a3e,color:#fff,stroke:#52b788
+    style CICD_INFRA fill:#7a3800,color:#fff,stroke:#ff9900
+    style OBSERVABILITY fill:#1a3a5c,color:#fff,stroke:#4a90d9
+    style SECURITY fill:#4a1942,color:#fff,stroke:#a855f7
+    style STORAGE fill:#1a2e1a,color:#fff,stroke:#52b788
+    style NOTIFY fill:#3d1a00,color:#fff,stroke:#d97706

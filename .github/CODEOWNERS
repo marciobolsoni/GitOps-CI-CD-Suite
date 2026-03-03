@@ -1,0 +1,18 @@
+# CODEOWNERS — marciobolsoni.cloud
+# Defines required reviewers for changes to critical paths.
+# Format: <pattern> <owner(s)>
+
+# Global fallback owner
+*                                   @marciobolsoni
+
+# Infrastructure changes require explicit review
+/infrastructure/terraform/          @marciobolsoni
+/infrastructure/appspec/            @marciobolsoni
+/.github/workflows/                 @marciobolsoni
+
+# Production environment changes require extra scrutiny
+/infrastructure/terraform/environments/prod/  @marciobolsoni
+
+# Security-sensitive files
+/infrastructure/terraform/modules/iam/        @marciobolsoni
+/scripts/rollback.sh                          @marciobolsoni

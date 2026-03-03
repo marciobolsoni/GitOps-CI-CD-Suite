@@ -1,0 +1,78 @@
+flowchart TD
+    START(["Deployment Event\nDetected"])
+
+    subgraph MONITORS["Real-Time Monitoring — Observation Window"]
+        M1["Error Rate\n> 1% threshold?"]
+        M2["P99 Latency\n> 2000ms?"]
+        M3["CPU Utilization\n> 85%?"]
+        M4["ECS Task\nHealth Failures?"]
+        M5["Custom Business\nMetric Breach?"]
+    end
+
+    DECISION{"Any Alarm\nIn BREACH?"}
+
+    subgraph AUTO_RB["Automated Rollback Path"]
+        direction TB
+        RB1["CodeDeploy: Stop\nDeployment Immediately"]
+        RB2["Shift 100% Traffic\nBack to Blue (Stable)"]
+        RB3["Deregister Green\nTask Set from ALB"]
+        RB4["Scale Down Green\nECS Tasks to 0"]
+        RB5["Publish SNS Event:\nROLLBACK_EXECUTED"]
+        RB6["GitHub Actions:\nCreate Incident Issue"]
+        RB7["Post Slack Alert:\n🚨 Auto-Rollback Triggered"]
+    end
+
+    subgraph MANUAL_RB["Manual Rollback Path"]
+        direction TB
+        MRB1["Engineer Triggers\nManual Rollback"]
+        MRB2["gh workflow run\nrollback.yml"]
+        MRB3["Select Target\nDeployment ID"]
+        MRB4["Execute Same\nRollback Steps"]
+    end
+
+    subgraph CONTINUE["Deployment Continue Path"]
+        direction TB
+        PROG["Progress to Next\nCanary Step"]
+        COMPLETE["Mark Deployment\nSuccessful"]
+        TAG_REL["Create Git Tag\n& GitHub Release"]
+        NOTIFY_OK["Notify: ✅ Success\nSlack + Email"]
+    end
+
+    subgraph POST_RB["Post-Rollback Actions"]
+        direction TB
+        ANALYZE["Analyze CloudWatch\nLogs & Metrics"]
+        ROOT_CAUSE["Root Cause\nAnalysis (RCA)"]
+        FIX["Engineer Creates\nFix Branch"]
+        RETEST["Re-run Full\nCI Pipeline"]
+    end
+
+    START --> M1
+    START --> M2
+    START --> M3
+    START --> M4
+    START --> M5
+
+    M1 --> DECISION
+    M2 --> DECISION
+    M3 --> DECISION
+    M4 --> DECISION
+    M5 --> DECISION
+
+    DECISION -->|"YES — Auto"| RB1
+    DECISION -->|"YES — Manual"| MRB1
+    DECISION -->|"NO"| PROG
+
+    RB1 --> RB2 --> RB3 --> RB4 --> RB5 --> RB6 --> RB7
+    MRB1 --> MRB2 --> MRB3 --> MRB4
+
+    RB7 --> ANALYZE
+    MRB4 --> ANALYZE
+    ANALYZE --> ROOT_CAUSE --> FIX --> RETEST
+
+    PROG --> COMPLETE --> TAG_REL --> NOTIFY_OK
+
+    style MONITORS fill:#1a3a5c,color:#fff,stroke:#4a90d9
+    style AUTO_RB fill:#7f1d1d,color:#fff,stroke:#ef4444
+    style MANUAL_RB fill:#4a1942,color:#fff,stroke:#a855f7
+    style CONTINUE fill:#1b4332,color:#fff,stroke:#52b788
+    style POST_RB fill:#3d2200,color:#fff,stroke:#d97706

@@ -1,0 +1,35 @@
+version: 0.0
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: <TASK_DEFINITION>
+        LoadBalancerInfo:
+          ContainerName: "marciobolsoni-web"
+          ContainerPort: 3000
+        PlatformVersion: "LATEST"
+        NetworkConfiguration:
+          AwsvpcConfiguration:
+            Subnets:
+              - <SUBNET_1>
+              - <SUBNET_2>
+            SecurityGroups:
+              - <SECURITY_GROUP>
+            AssignPublicIp: "DISABLED"
+
+Hooks:
+  # ─── Pre-Traffic Hook: Validate new task set before routing traffic ───
+  - BeforeAllowTraffic:
+      - Location: "scripts/hooks/before-allow-traffic.sh"
+        Timeout: 300
+        RulesLocation: "scripts/hooks/validation-rules.json"
+
+  # ─── After 10% traffic shifted: Run canary health checks ───
+  - AfterAllowTestTraffic:
+      - Location: "scripts/hooks/after-test-traffic.sh"
+        Timeout: 300
+
+  # ─── After 100% traffic shifted: Final validation ───
+  - AfterAllowTraffic:
+      - Location: "scripts/hooks/after-allow-traffic.sh"
+        Timeout: 300

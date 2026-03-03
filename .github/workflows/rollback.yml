@@ -1,0 +1,178 @@
+name: "Manual Rollback"
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options:
+          - staging
+          - production
+        required: true
+        default: staging
+      rollback_type:
+        description: "Rollback type"
+        type: choice
+        options:
+          - previous-deployment   # Roll back to the last successful CodeDeploy deployment
+          - specific-task-def     # Roll back to a specific ECS task definition ARN
+          - specific-image-tag    # Roll back to a specific Docker image tag
+        required: true
+        default: previous-deployment
+      target_value:
+        description: "Value for rollback target (task def ARN or image tag — leave empty for previous-deployment)"
+        required: false
+        default: ""
+      reason:
+        description: "Reason for rollback (for audit trail)"
+        required: true
+        default: "Manual rollback requested"
+
+permissions:
+  id-token: write
+  contents: write
+  issues: write
+  deployments: write
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: marciobolsoni-cloud
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Job 1: Validate Rollback Request
+  # ─────────────────────────────────────────────
+  validate:
+    name: "Validate Rollback Request"
+    runs-on: ubuntu-latest
+    outputs:
+      ecs-cluster: ${{ steps.set-env.outputs.cluster }}
+      ecs-service: ${{ steps.set-env.outputs.service }}
+      codedeploy-app: ${{ steps.set-env.outputs.cd-app }}
+      codedeploy-group: ${{ steps.set-env.outputs.cd-group }}
+    steps:
+      - name: Set environment-specific variables
+        id: set-env
+        run: |
+          if [ "${{ github.event.inputs.environment }}" == "production" ]; then
+            echo "cluster=marciobolsoni-cloud-prod" >> $GITHUB_OUTPUT
+            echo "service=marciobolsoni-web-prod" >> $GITHUB_OUTPUT
+            echo "cd-app=marciobolsoni-cloud" >> $GITHUB_OUTPUT
+            echo "cd-group=marciobolsoni-prod" >> $GITHUB_OUTPUT
+          else
+            echo "cluster=marciobolsoni-cloud-staging" >> $GITHUB_OUTPUT
+            echo "service=marciobolsoni-web-staging" >> $GITHUB_OUTPUT
+            echo "cd-app=marciobolsoni-cloud" >> $GITHUB_OUTPUT
+            echo "cd-group=marciobolsoni-staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Log rollback request
+        run: |
+          echo "═══════════════════════════════════════════"
+          echo "  ROLLBACK REQUEST"
+          echo "═══════════════════════════════════════════"
+          echo "  Environment : ${{ github.event.inputs.environment }}"
+          echo "  Type        : ${{ github.event.inputs.rollback_type }}"
+          echo "  Target      : ${{ github.event.inputs.target_value }}"
+          echo "  Reason      : ${{ github.event.inputs.reason }}"
+          echo "  Requested by: ${{ github.actor }}"
+          echo "  Timestamp   : $(date -u)"
+          echo "═══════════════════════════════════════════"
+
+  # ─────────────────────────────────────────────
+  # Job 2: Execute Rollback
+  # ─────────────────────────────────────────────
+  execute-rollback:
+    name: "Execute Rollback — ${{ github.event.inputs.environment }}"
+    runs-on: ubuntu-latest
+    needs: validate
+    environment:
+      name: ${{ github.event.inputs.environment }}-rollback
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-ManualRollback-${{ github.event.inputs.environment }}-${{ github.run_id }}
+
+      - name: Execute rollback script
+        run: |
+          chmod +x scripts/rollback.sh
+          ./scripts/rollback.sh \
+            --environment "${{ github.event.inputs.environment }}" \
+            --cluster "${{ needs.validate.outputs.ecs-cluster }}" \
+            --service "${{ needs.validate.outputs.ecs-service }}" \
+            --codedeploy-app "${{ needs.validate.outputs.codedeploy-app }}" \
+            --codedeploy-group "${{ needs.validate.outputs.codedeploy-group }}" \
+            --rollback-type "${{ github.event.inputs.rollback_type }}" \
+            --target-value "${{ github.event.inputs.target_value }}" \
+            --reason "${{ github.event.inputs.reason }}"
+
+      - name: Verify rollback health
+        run: |
+          sleep 60
+          ENV="${{ github.event.inputs.environment }}"
+          if [ "${ENV}" == "production" ]; then
+            URL="https://marciobolsoni.cloud/health"
+          else
+            URL="https://staging.marciobolsoni.cloud/health"
+          fi
+          
+          HEALTH=$(curl -sf --max-time 15 "${URL}" | jq -r '.status' || echo "unknown")
+          echo "Post-rollback health: ${HEALTH}"
+          
+          if [ "${HEALTH}" != "healthy" ]; then
+            echo "❌ Service is not healthy after rollback!"
+            exit 1
+          fi
+          echo "✅ Service is healthy after rollback"
+
+  # ─────────────────────────────────────────────
+  # Job 3: Post-Rollback Audit & Notifications
+  # ─────────────────────────────────────────────
+  post-rollback:
+    name: "Post-Rollback Audit"
+    runs-on: ubuntu-latest
+    needs: execute-rollback
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create audit issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = '${{ needs.execute-rollback.result }}' === 'success' ? '✅ Successful' : '❌ Failed';
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[ROLLBACK AUDIT] ${{ github.event.inputs.environment }} — ${new Date().toISOString().split('T')[0]}`,
+              body: `## Rollback Audit Trail\n\n**Status:** ${status}\n**Environment:** ${{ github.event.inputs.environment }}\n**Type:** ${{ github.event.inputs.rollback_type }}\n**Target:** \`${{ github.event.inputs.target_value || 'previous-deployment' }}\`\n**Reason:** ${{ github.event.inputs.reason }}\n**Requested by:** @${{ github.actor }}\n**Timestamp:** ${new Date().toISOString()}\n**Workflow:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`,
+              labels: ['rollback', 'audit', '${{ github.event.inputs.environment }}']
+            });
+
+      - name: Notify rollback result
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🔄 Manual Rollback — ${{ github.event.inputs.environment }} — ${{ needs.execute-rollback.result }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🔄 *Manual Rollback Executed*\n*Environment:* ${{ github.event.inputs.environment }}\n*Status:* ${{ needs.execute-rollback.result }}\n*Reason:* ${{ github.event.inputs.reason }}\n*Requested by:* ${{ github.actor }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

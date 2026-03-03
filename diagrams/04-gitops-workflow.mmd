@@ -1,0 +1,39 @@
+gitGraph
+   commit id: "Initial commit"
+
+   branch feature/new-component
+   checkout feature/new-component
+   commit id: "feat: add new component"
+   commit id: "test: add unit tests"
+   commit id: "fix: lint errors"
+
+   checkout main
+   branch staging
+   checkout staging
+
+   checkout feature/new-component
+   commit id: "chore: update docs"
+
+   checkout staging
+   merge feature/new-component id: "PR #42 merged to staging" tag: "CI: ✅ All checks pass"
+
+   commit id: "deploy: staging canary 10%"
+   commit id: "deploy: staging canary 100%"
+   commit id: "test: E2E validation pass"
+
+   checkout main
+   merge staging id: "Release PR approved" tag: "v1.2.0"
+
+   commit id: "deploy: prod canary 10%"
+   commit id: "deploy: prod canary 50%"
+   commit id: "deploy: prod canary 100%"
+   commit id: "tag: release v1.2.0 ✅"
+
+   branch hotfix/critical-fix
+   checkout hotfix/critical-fix
+   commit id: "fix: critical security patch"
+
+   checkout main
+   merge hotfix/critical-fix id: "Hotfix merged" tag: "v1.2.1"
+   commit id: "deploy: prod hotfix canary"
+   commit id: "tag: release v1.2.1 ✅"

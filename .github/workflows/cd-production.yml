@@ -1,0 +1,344 @@
+name: "CD — Deploy to Production (Canary + Approval)"
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Docker image tag to deploy (leave empty to use latest)"
+        required: false
+        default: ""
+      deployment_type:
+        description: "Deployment type"
+        type: choice
+        options:
+          - canary
+          - blue-green
+          - rollback
+        default: canary
+      rollback_deployment_id:
+        description: "CodeDeploy Deployment ID for rollback (only used when type=rollback)"
+        required: false
+        default: ""
+
+concurrency:
+  group: cd-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: marciobolsoni-cloud
+  ECS_CLUSTER: marciobolsoni-cloud-prod
+  ECS_SERVICE: marciobolsoni-web-prod
+  CODEDEPLOY_APP: marciobolsoni-cloud
+  CODEDEPLOY_GROUP: marciobolsoni-prod
+  ENVIRONMENT: production
+
+permissions:
+  id-token: write
+  contents: write
+  deployments: write
+  issues: write
+
+jobs:
+  # ─────────────────────────────────────────────
+  # Job 1: Pre-Deployment Validation
+  # ─────────────────────────────────────────────
+  pre-deploy-checks:
+    name: "Pre-Deployment Validation"
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.resolve-tag.outputs.tag }}
+      deployment-id: ${{ steps.get-deploy-id.outputs.deployment-id }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-CD-Prod-PreCheck-${{ github.run_id }}
+
+      - name: Resolve image tag
+        id: resolve-tag
+        run: |
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            echo "tag=${{ github.event.inputs.image_tag }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Get last successful deployment ID
+        id: get-deploy-id
+        run: |
+          DEPLOY_ID=$(aws deploy list-deployments \
+            --application-name ${{ env.CODEDEPLOY_APP }} \
+            --deployment-group-name ${{ env.CODEDEPLOY_GROUP }} \
+            --include-only-statuses Succeeded \
+            --query 'deployments[0]' \
+            --output text 2>/dev/null || echo "none")
+          echo "deployment-id=${DEPLOY_ID}" >> $GITHUB_OUTPUT
+          echo "Last successful deployment: ${DEPLOY_ID}"
+
+      - name: Verify staging was deployed successfully
+        run: |
+          echo "Verifying staging deployment health before promoting to production..."
+          HEALTH=$(curl -sf --max-time 10 \
+            https://staging.marciobolsoni.cloud/health | jq -r '.status' || echo "unknown")
+          echo "Staging health: ${HEALTH}"
+          if [ "${HEALTH}" != "healthy" ]; then
+            echo "❌ Staging is not healthy. Blocking production deployment."
+            exit 1
+          fi
+
+      - name: Production health check
+        run: |
+          HEALTH=$(curl -sf --max-time 10 \
+            https://marciobolsoni.cloud/health | jq -r '.status' || echo "unknown")
+          echo "Production health: ${HEALTH}"
+
+  # ─────────────────────────────────────────────
+  # Job 2: Manual Approval Gate
+  # ─────────────────────────────────────────────
+  approval:
+    name: "Manual Approval — Production"
+    runs-on: ubuntu-latest
+    needs: pre-deploy-checks
+    environment:
+      name: production-approval
+    steps:
+      - name: Awaiting manual approval
+        run: |
+          echo "🔐 Production deployment requires manual approval."
+          echo "Image: ${{ needs.pre-deploy-checks.outputs.image-tag }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Triggered by: ${{ github.actor }}"
+
+  # ─────────────────────────────────────────────
+  # Job 3: Terraform Apply — Production
+  # ─────────────────────────────────────────────
+  terraform-apply:
+    name: "Terraform Apply — Production"
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, approval]
+    environment:
+      name: production-infra
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-TFApply-Prod-${{ github.run_id }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.7"
+
+      - name: Terraform Init
+        working-directory: infrastructure/terraform/environments/prod
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=prod/terraform.tfstate" \
+            -backend-config="dynamodb_table=${{ secrets.TF_LOCK_TABLE }}"
+
+      - name: Terraform Apply
+        working-directory: infrastructure/terraform/environments/prod
+        run: |
+          terraform apply -auto-approve \
+            -var="image_tag=${{ needs.pre-deploy-checks.outputs.image-tag }}" \
+            -var="environment=prod"
+
+  # ─────────────────────────────────────────────
+  # Job 4: Production Canary Deployment
+  # ─────────────────────────────────────────────
+  canary-deploy:
+    name: "Production Canary Deployment"
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, terraform-apply]
+    environment:
+      name: production
+      url: https://marciobolsoni.cloud
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-CD-Prod-Deploy-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Update ECS task definition
+        id: task-def
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: infrastructure/appspec/task-definition-prod.json
+          container-name: marciobolsoni-web
+          image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.pre-deploy-checks.outputs.image-tag }}
+          environment-variables: |
+            ENVIRONMENT=production
+            VERSION=${{ needs.pre-deploy-checks.outputs.image-tag }}
+            GIT_COMMIT=${{ github.sha }}
+
+      - name: Deploy to ECS via CodeDeploy (Canary 10%→100%)
+        id: deploy
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ steps.task-def.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+          codedeploy-appspec: infrastructure/appspec/appspec-prod.yml
+          codedeploy-application: ${{ env.CODEDEPLOY_APP }}
+          codedeploy-deployment-group: ${{ env.CODEDEPLOY_GROUP }}
+
+      - name: Monitor canary — Phase 1 (10% traffic, 5min window)
+        run: |
+          echo "📊 Phase 1: 10% canary traffic — monitoring for 5 minutes..."
+          sleep 300
+          chmod +x scripts/check-alarms.sh
+          ./scripts/check-alarms.sh ${{ env.ENVIRONMENT }}
+
+      - name: Monitor canary — Phase 2 (50% traffic, 5min window)
+        run: |
+          echo "📊 Phase 2: 50% canary traffic — monitoring for 5 minutes..."
+          sleep 300
+          ./scripts/check-alarms.sh ${{ env.ENVIRONMENT }}
+
+      - name: Monitor canary — Phase 3 (100% traffic)
+        run: |
+          echo "📊 Phase 3: 100% traffic shifted to new version"
+          ./scripts/check-alarms.sh ${{ env.ENVIRONMENT }}
+
+  # ─────────────────────────────────────────────
+  # Job 5: Post-Deployment & Release Tagging
+  # ─────────────────────────────────────────────
+  post-deploy:
+    name: "Post-Deployment & Release"
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, canary-deploy]
+    if: success()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run E2E validation
+        run: |
+          chmod +x scripts/e2e-tests.sh
+          ./scripts/e2e-tests.sh https://marciobolsoni.cloud
+
+      - name: Create GitHub Release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = `v${{ needs.pre-deploy-checks.outputs.image-tag }}`;
+            const release = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: `Release ${tag}`,
+              body: `## Production Deployment\n\n- **Image Tag:** \`${{ needs.pre-deploy-checks.outputs.image-tag }}\`\n- **Commit:** \`${{ github.sha }}\`\n- **Deployed by:** ${{ github.actor }}\n- **Deployment Strategy:** Canary (10% → 50% → 100%)\n- **Timestamp:** ${new Date().toISOString()}`,
+              draft: false,
+              prerelease: false
+            });
+            console.log(`Release created: ${release.data.html_url}`);
+
+      - name: Notify production success
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🚀 *Production Deployment Successful — marciobolsoni.cloud*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🚀 *Production Canary Deployment Successful*\n*Site:* https://marciobolsoni.cloud\n*Version:* `${{ needs.pre-deploy-checks.outputs.image-tag }}`\n*Commit:* `${{ github.sha }}`\n*Strategy:* Canary 10% → 50% → 100%\n*Actor:* ${{ github.actor }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+
+  # ─────────────────────────────────────────────
+  # Job 6: Automated Rollback (on failure)
+  # ─────────────────────────────────────────────
+  rollback:
+    name: "Automated Rollback"
+    runs-on: ubuntu-latest
+    needs: [pre-deploy-checks, canary-deploy]
+    if: failure()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-Rollback-Prod-${{ github.run_id }}
+
+      - name: Execute automated rollback
+        run: |
+          chmod +x scripts/rollback.sh
+          ./scripts/rollback.sh \
+            --environment ${{ env.ENVIRONMENT }} \
+            --cluster ${{ env.ECS_CLUSTER }} \
+            --service ${{ env.ECS_SERVICE }} \
+            --codedeploy-app ${{ env.CODEDEPLOY_APP }} \
+            --codedeploy-group ${{ env.CODEDEPLOY_GROUP }} \
+            --deployment-id "${{ needs.pre-deploy-checks.outputs.deployment-id }}"
+
+      - name: Create incident GitHub Issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🚨 [INCIDENT] Production Rollback Triggered — ${new Date().toISOString().split('T')[0]}`,
+              body: `## Incident Report — Automated Rollback\n\n**Severity:** High\n**Environment:** Production\n**Timestamp:** ${new Date().toISOString()}\n\n### What happened\nAutomated rollback was triggered during canary deployment due to CloudWatch alarm breach or deployment failure.\n\n### Deployment Details\n- **Failed Version:** \`${{ needs.pre-deploy-checks.outputs.image-tag }}\`\n- **Commit:** \`${{ github.sha }}\`\n- **Triggered by:** ${{ github.actor }}\n- **Workflow Run:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\n\n### Next Steps\n- [ ] Investigate CloudWatch logs and metrics\n- [ ] Perform root cause analysis\n- [ ] Create fix branch and re-run CI pipeline\n- [ ] Update this issue with findings\n\n/cc @${{ github.actor }}`,
+              labels: ['incident', 'production', 'rollback', 'high-priority']
+            });
+            console.log(`Incident issue created: ${issue.data.html_url}`);
+
+      - name: Notify rollback via Slack
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload: |
+            {
+              "text": "🚨 *PRODUCTION ROLLBACK TRIGGERED — marciobolsoni.cloud*",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "🚨 *PRODUCTION ROLLBACK TRIGGERED*\n*Site:* https://marciobolsoni.cloud\n*Failed Version:* `${{ needs.pre-deploy-checks.outputs.image-tag }}`\n*Commit:* `${{ github.sha }}`\n*Actor:* ${{ github.actor }}\n*Action Required:* Investigate and fix before re-deploying\n*Run:* <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow>"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

@@ -1,0 +1,63 @@
+# ─── Terraform ───────────────────────────────────────────────────────────────
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan
+*.tfvars
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# ─── Node.js ─────────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+dist/
+build/
+coverage/
+*.lcov
+.nyc_output/
+
+# ─── Docker ──────────────────────────────────────────────────────────────────
+*.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# ─── AWS ─────────────────────────────────────────────────────────────────────
+.aws/
+aws-exports.js
+
+# ─── Secrets & Credentials ───────────────────────────────────────────────────
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+.secrets/
+credentials
+
+# ─── IDE & OS ────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── Build Artifacts ─────────────────────────────────────────────────────────
+taskdef.json
+appspec-generated.yml
+imageDetail.json
+*.sarif
+
+# ─── Logs ────────────────────────────────────────────────────────────────────
+*.log
+logs/

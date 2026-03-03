@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Mermaid Renderer</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: "Noto Sans CJK SC", "WenQuanYi Zen Hei", "SimSun", "Microsoft YaHei",
+                         "Arial Unicode MS", "Arial", sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            background: white;
+            color: #333;
+        }
+         
+        .mermaid {
+            text-align: center;
+            margin: 1.5em 0;
+            page-break-inside: avoid;
+            background-color: transparent;
+        }
+        .mermaid svg {
+            max-width: 100%;
+            height: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="mermaid">flowchart TD
+    subgraph DEV[&#34;👨‍💻 Developer Workstation&#34;]
+        CODE[&#34;Source Code\n(Feature Branch)&#34;]
+        PR[&#34;Pull Request\nOpened&#34;]
+    end
+
+    subgraph GH[&#34;GitHub Repository — marciobolsoni.cloud&#34;]
+        direction TB
+        MAIN[&#34;main branch\n(Production)&#34;]
+        STAGING_BR[&#34;staging branch&#34;]
+        FEATURE[&#34;feature/* branches&#34;]
+        GHSEC[&#34;GitHub Secrets &amp;\nOIDC Identity Provider&#34;]
+    end
+
+    subgraph CI[&#34;GitHub Actions — CI Pipeline&#34;]
+        direction TB
+        LINT[&#34;Job: Lint &amp; Static Analysis\n(ESLint / TFLint / Checkov)&#34;]
+        TEST[&#34;Job: Unit &amp; Integration Tests\n(Jest / Pytest)&#34;]
+        SCAN[&#34;Job: Security Scan\n(Trivy / Snyk)&#34;]
+        BUILD[&#34;Job: Docker Build\n&amp; Push to ECR&#34;]
+        TFPLAN[&#34;Job: Terraform Plan\n(PR Comment)&#34;]
+    end
+
+    subgraph AWS_TOOLS[&#34;AWS CodeSuite&#34;]
+        direction TB
+        CB[&#34;AWS CodeBuild\n(Build Artifacts)&#34;]
+        CP[&#34;AWS CodePipeline\n(Orchestration)&#34;]
+        CD[&#34;AWS CodeDeploy\n(Canary Deployment)&#34;]
+        CCM[&#34;AWS CodeArtifact\n(Artifact Registry)&#34;]
+    end
+
+    subgraph CD_STRAT[&#34;Deployment Strategy&#34;]
+        direction TB
+        CANARY[&#34;Canary Release\n(10% → 100% traffic)&#34;]
+        BLUEGREEN[&#34;Blue/Green\n(ECS Task Sets)&#34;]
+        ROLLBACK[&#34;Automated Rollback\n(CloudWatch Alarms)&#34;]
+    end
+
+    subgraph AWS_INFRA[&#34;AWS Infrastructure&#34;]
+        direction LR
+        ECR[&#34;Amazon ECR\n(Container Registry)&#34;]
+        ECS[&#34;Amazon ECS\n(Fargate Cluster)&#34;]
+        ALB[&#34;Application Load Balancer\n(Weighted Target Groups)&#34;]
+        CW[&#34;CloudWatch\n(Metrics &amp; Alarms)&#34;]
+        S3[&#34;S3\n(Artifacts &amp; State)&#34;]
+        TF_STATE[&#34;S3 &#43; DynamoDB\n(Terraform Remote State)&#34;]
+    end
+
+    subgraph NOTIFY[&#34;Notifications&#34;]
+        SNS[&#34;AWS SNS&#34;]
+        SLACK[&#34;Slack Webhook&#34;]
+        EMAIL[&#34;Email Alerts&#34;]
+    end
+
+    CODE --&gt;|git push| FEATURE
+    FEATURE --&gt;|open PR| PR
+    PR --&gt;|triggers| LINT
+    LINT --&gt; TEST
+    TEST --&gt; SCAN
+    SCAN --&gt; TFPLAN
+    TFPLAN --&gt;|PR approved| STAGING_BR
+
+    STAGING_BR --&gt;|triggers| BUILD
+    BUILD --&gt;|push image| ECR
+    BUILD --&gt;|upload artifact| S3
+    ECR --&gt; CB
+    CB --&gt; CP
+    CP --&gt; CD
+    CD --&gt; CANARY
+    CANARY --&gt; BLUEGREEN
+    BLUEGREEN --&gt; ECS
+    ECS --&gt; ALB
+    ALB --&gt; CW
+    CW --&gt;|alarm triggered| ROLLBACK
+    ROLLBACK --&gt;|notify| SNS
+    SNS --&gt; SLACK
+    SNS --&gt; EMAIL
+
+    STAGING_BR --&gt;|merge approved| MAIN
+    MAIN --&gt;|prod deploy| CP
+
+    GHSEC --&gt;|OIDC AssumeRole| AWS_TOOLS
+    TF_STATE --&gt; AWS_INFRA
+
+    style DEV fill:#1e3a5f,color:#fff,stroke:#4a90d9
+    style GH fill:#24292e,color:#fff,stroke:#586069
+    style CI fill:#2d6a4f,color:#fff,stroke:#52b788
+    style AWS_TOOLS fill:#ff9900,color:#000,stroke:#cc7a00
+    style CD_STRAT fill:#7b2d8b,color:#fff,stroke:#a855f7
+    style AWS_INFRA fill:#1a4971,color:#fff,stroke:#4a90d9
+    style NOTIFY fill:#5c3317,color:#fff,stroke:#d97706
+</div>
+    <script>
+        
+        if (typeof mermaid !== 'undefined') {
+            mermaid.initialize({
+                startOnLoad: false,  
+                theme: 'default',
+                securityLevel: 'loose'
+            });
+        }
+
+        
+        document.addEventListener("DOMContentLoaded", async function() {
+            if (typeof mermaid === 'undefined') {
+                return;
+            }
+
+            const mermaidElements = document.querySelectorAll('.mermaid');
+            let hasError = false;
+
+            for (let i = 0; i < mermaidElements.length; i++) {
+                const element = mermaidElements[i];
+                const mermaidCode = element.textContent.trim();
+
+                try {
+                    const { svg } = await mermaid.render('mermaid-diagram-' + i, mermaidCode);
+                    element.innerHTML = svg;
+                    console.log('Mermaid diagram ' + (i + 1) + ' rendered successfully');
+                } catch (error) {
+                    hasError = true;
+                    console.error('Mermaid rendering error for diagram ' + (i + 1) + ':', error);
+
+                    
+                    element.innerHTML = '<div class="mermaid-error" style="color: red; border: 2px solid red; padding: 10px; border-radius: 5px; background: #ffeeee;">' +
+                        '<strong>Mermaid Rendering Error (Diagram ' + (i + 1) + '):</strong><br>' +
+                        '<code>' + error.message + '</code>' +
+                        '</div>';
+
+                    
+                    document.body.classList.add('mermaid-render-failed');
+                }
+            }
+
+            
+            window.mermaidRenderComplete = true;
+            window.mermaidHasError = hasError;
+        });
+    </script>
+</body>
+</html>

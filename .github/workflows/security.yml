@@ -1,0 +1,162 @@
+name: "Security — Scheduled Scans & Compliance"
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Every Monday at 06:00 UTC
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "infrastructure/**"
+      - "src/Dockerfile"
+      - "src/package*.json"
+
+permissions:
+  id-token: write
+  contents: read
+  security-events: write
+  issues: write
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # ─────────────────────────────────────────────
+  # SAST — Static Application Security Testing
+  # ─────────────────────────────────────────────
+  sast:
+    name: "SAST — CodeQL Analysis"
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        language: [javascript, python]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # ─────────────────────────────────────────────
+  # IaC Security — Terraform & Docker
+  # ─────────────────────────────────────────────
+  iac-security:
+    name: "IaC Security Scan"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Checkov on Terraform
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infrastructure/terraform
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-tf.sarif
+          soft_fail: false
+          check: "CKV_AWS_*"
+
+      - name: Run Hadolint on Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: src/Dockerfile
+          format: sarif
+          output-file: hadolint-results.sarif
+          no-fail: true
+
+      - name: Upload security results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-tf.sarif
+
+  # ─────────────────────────────────────────────
+  # Container Image Scanning
+  # ─────────────────────────────────────────────
+  container-scan:
+    name: "Container Image Vulnerability Scan"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-SecurityScan-${{ github.run_id }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Run Trivy on production image
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/marciobolsoni-cloud:latest
+          format: "sarif"
+          output: "trivy-prod-image.sarif"
+          severity: "CRITICAL,HIGH"
+          exit-code: "0"
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-prod-image.sarif
+
+  # ─────────────────────────────────────────────
+  # Dependency Audit
+  # ─────────────────────────────────────────────
+  dependency-audit:
+    name: "Dependency Vulnerability Audit"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run npm audit
+        working-directory: src
+        run: npm audit --audit-level=high --json > npm-audit.json || true
+
+      - name: Check for critical vulnerabilities
+        working-directory: src
+        run: |
+          CRITICAL=$(cat npm-audit.json | jq '.metadata.vulnerabilities.critical // 0')
+          HIGH=$(cat npm-audit.json | jq '.metadata.vulnerabilities.high // 0')
+          echo "Critical: ${CRITICAL}, High: ${HIGH}"
+          if [[ "${CRITICAL}" -gt 0 ]]; then
+            echo "❌ Critical vulnerabilities found!"
+            exit 1
+          fi
+
+      - name: Create issue for high vulnerabilities
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[SECURITY] Dependency vulnerabilities found — ${new Date().toISOString().split('T')[0]}`,
+              body: `## Security Alert — Dependency Vulnerabilities\n\nCritical or high severity vulnerabilities were found in npm dependencies.\n\n**Workflow:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\n\nPlease review and update affected packages immediately.`,
+              labels: ['security', 'dependencies', 'high-priority']
+            });

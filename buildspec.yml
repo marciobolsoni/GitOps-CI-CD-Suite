@@ -1,0 +1,139 @@
+###############################################################################
+# buildspec.yml — AWS CodeBuild Build Specification
+# marciobolsoni.cloud GitOps CI/CD Suite
+#
+# Used by AWS CodePipeline → CodeBuild to build, scan, and push the
+# Docker image to ECR, then produce the deployment artifacts.
+###############################################################################
+
+version: 0.2
+
+env:
+  variables:
+    DOCKER_BUILDKIT: "1"
+    IMAGE_NAME: "marciobolsoni-web"
+  parameter-store:
+    SLACK_WEBHOOK_URL: "/marciobolsoni-cloud/slack-webhook-url"
+  exported-variables:
+    - IMAGE_TAG
+    - IMAGE_URI
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "=== Installing dependencies ==="
+      - curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+      - npm install -g @aws-amplify/cli 2>/dev/null || true
+
+  pre_build:
+    commands:
+      - echo "=== Pre-Build Phase ==="
+      - echo "Build started at $(date)"
+      - echo "Commit SHA: ${CODEBUILD_RESOLVED_SOURCE_VERSION}"
+
+      # Authenticate with ECR
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${ECR_REPOSITORY_URI}
+
+      # Set image tag from commit SHA
+      - export IMAGE_TAG="sha-$(echo ${CODEBUILD_RESOLVED_SOURCE_VERSION} | cut -c1-7)"
+      - export IMAGE_URI="${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
+      - echo "Image URI: ${IMAGE_URI}"
+
+      # Install Node.js dependencies
+      - cd src && npm ci && cd ..
+
+  build:
+    commands:
+      - echo "=== Build Phase ==="
+
+      # Run tests
+      - cd src && npm run test:ci && cd ..
+
+      # Build Docker image
+      - |
+        docker build \
+          --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          --build-arg GIT_COMMIT="${CODEBUILD_RESOLVED_SOURCE_VERSION}" \
+          --build-arg VERSION="${IMAGE_TAG}" \
+          --cache-from "${ECR_REPOSITORY_URI}:latest" \
+          -t "${IMAGE_URI}" \
+          -t "${ECR_REPOSITORY_URI}:latest" \
+          -f src/Dockerfile \
+          src/
+
+      # Security scan with Grype
+      - echo "=== Security Scanning ==="
+      - grype "${IMAGE_URI}" --fail-on critical || (echo "Critical vulnerabilities found!" && exit 1)
+
+  post_build:
+    commands:
+      - echo "=== Post-Build Phase ==="
+
+      # Push image to ECR
+      - docker push "${IMAGE_URI}"
+      - docker push "${ECR_REPOSITORY_URI}:latest"
+      - echo "Image pushed: ${IMAGE_URI}"
+
+      # Generate task definition with new image
+      - |
+        aws ecs describe-task-definition \
+          --task-definition "marciobolsoni-cloud-${ENVIRONMENT}-app" \
+          --query 'taskDefinition' \
+          --output json > taskdef-raw.json
+
+        # Inject new image tag
+        jq --arg IMAGE "${IMAGE_URI}" \
+          '.containerDefinitions[0].image = $IMAGE | 
+           del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .placementConstraints, .compatibilities, .registeredAt, .registeredBy)' \
+          taskdef-raw.json > taskdef.json
+
+      # Generate appspec.yml
+      - |
+        cat > appspec.yml << EOF
+        version: 0.0
+        Resources:
+          - TargetService:
+              Type: AWS::ECS::Service
+              Properties:
+                TaskDefinition: <TASK_DEFINITION>
+                LoadBalancerInfo:
+                  ContainerName: "marciobolsoni-web"
+                  ContainerPort: 3000
+        EOF
+
+      # Output build summary
+      - echo "=== Build Summary ==="
+      - echo "Image Tag  : ${IMAGE_TAG}"
+      - echo "Image URI  : ${IMAGE_URI}"
+      - echo "Environment: ${ENVIRONMENT}"
+      - echo "Commit     : ${CODEBUILD_RESOLVED_SOURCE_VERSION}"
+      - echo "Build ID   : ${CODEBUILD_BUILD_ID}"
+
+artifacts:
+  files:
+    - taskdef.json
+    - appspec.yml
+    - infrastructure/appspec/appspec-${ENVIRONMENT}.yml
+  discard-paths: no
+  secondary-artifacts:
+    ImageDetails:
+      files:
+        - imageDetail.json
+      discard-paths: yes
+
+reports:
+  TestResults:
+    files:
+      - "src/coverage/junit.xml"
+    file-format: "JUNITXML"
+  CoverageReport:
+    files:
+      - "src/coverage/lcov.info"
+    file-format: "CLOVERXML"
+
+cache:
+  paths:
+    - "/root/.npm/**/*"
+    - "src/node_modules/**/*"

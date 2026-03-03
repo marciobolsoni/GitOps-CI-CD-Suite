@@ -1,0 +1,91 @@
+flowchart TD
+    subgraph DEV["👨‍💻 Developer Workstation"]
+        CODE["Source Code\n(Feature Branch)"]
+        PR["Pull Request\nOpened"]
+    end
+
+    subgraph GH["GitHub Repository — marciobolsoni.cloud"]
+        direction TB
+        MAIN["main branch\n(Production)"]
+        STAGING_BR["staging branch"]
+        FEATURE["feature/* branches"]
+        GHSEC["GitHub Secrets &\nOIDC Identity Provider"]
+    end
+
+    subgraph CI["GitHub Actions — CI Pipeline"]
+        direction TB
+        LINT["Job: Lint & Static Analysis\n(ESLint / TFLint / Checkov)"]
+        TEST["Job: Unit & Integration Tests\n(Jest / Pytest)"]
+        SCAN["Job: Security Scan\n(Trivy / Snyk)"]
+        BUILD["Job: Docker Build\n& Push to ECR"]
+        TFPLAN["Job: Terraform Plan\n(PR Comment)"]
+    end
+
+    subgraph AWS_TOOLS["AWS CodeSuite"]
+        direction TB
+        CB["AWS CodeBuild\n(Build Artifacts)"]
+        CP["AWS CodePipeline\n(Orchestration)"]
+        CD["AWS CodeDeploy\n(Canary Deployment)"]
+        CCM["AWS CodeArtifact\n(Artifact Registry)"]
+    end
+
+    subgraph CD_STRAT["Deployment Strategy"]
+        direction TB
+        CANARY["Canary Release\n(10% → 100% traffic)"]
+        BLUEGREEN["Blue/Green\n(ECS Task Sets)"]
+        ROLLBACK["Automated Rollback\n(CloudWatch Alarms)"]
+    end
+
+    subgraph AWS_INFRA["AWS Infrastructure"]
+        direction LR
+        ECR["Amazon ECR\n(Container Registry)"]
+        ECS["Amazon ECS\n(Fargate Cluster)"]
+        ALB["Application Load Balancer\n(Weighted Target Groups)"]
+        CW["CloudWatch\n(Metrics & Alarms)"]
+        S3["S3\n(Artifacts & State)"]
+        TF_STATE["S3 + DynamoDB\n(Terraform Remote State)"]
+    end
+
+    subgraph NOTIFY["Notifications"]
+        SNS["AWS SNS"]
+        SLACK["Slack Webhook"]
+        EMAIL["Email Alerts"]
+    end
+
+    CODE -->|git push| FEATURE
+    FEATURE -->|open PR| PR
+    PR -->|triggers| LINT
+    LINT --> TEST
+    TEST --> SCAN
+    SCAN --> TFPLAN
+    TFPLAN -->|PR approved| STAGING_BR
+
+    STAGING_BR -->|triggers| BUILD
+    BUILD -->|push image| ECR
+    BUILD -->|upload artifact| S3
+    ECR --> CB
+    CB --> CP
+    CP --> CD
+    CD --> CANARY
+    CANARY --> BLUEGREEN
+    BLUEGREEN --> ECS
+    ECS --> ALB
+    ALB --> CW
+    CW -->|alarm triggered| ROLLBACK
+    ROLLBACK -->|notify| SNS
+    SNS --> SLACK
+    SNS --> EMAIL
+
+    STAGING_BR -->|merge approved| MAIN
+    MAIN -->|prod deploy| CP
+
+    GHSEC -->|OIDC AssumeRole| AWS_TOOLS
+    TF_STATE --> AWS_INFRA
+
+    style DEV fill:#1e3a5f,color:#fff,stroke:#4a90d9
+    style GH fill:#24292e,color:#fff,stroke:#586069
+    style CI fill:#2d6a4f,color:#fff,stroke:#52b788
+    style AWS_TOOLS fill:#ff9900,color:#000,stroke:#cc7a00
+    style CD_STRAT fill:#7b2d8b,color:#fff,stroke:#a855f7
+    style AWS_INFRA fill:#1a4971,color:#fff,stroke:#4a90d9
+    style NOTIFY fill:#5c3317,color:#fff,stroke:#d97706

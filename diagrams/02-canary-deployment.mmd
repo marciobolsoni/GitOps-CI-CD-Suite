@@ -1,0 +1,86 @@
+flowchart TD
+    subgraph TRIGGER["Deployment Trigger"]
+        MERGE["Merge to main/staging\nbranch detected"]
+        GHA["GitHub Actions\nWorkflow Dispatched"]
+    end
+
+    subgraph PRE["Pre-Deployment Checks"]
+        HEALTH["Health Check\nCurrent Production"]
+        SMOKE["Smoke Tests\nStaging Environment"]
+        APPROVE["Manual Approval Gate\n(Production only)"]
+    end
+
+    subgraph DEPLOY_INIT["CodeDeploy — Deployment Init"]
+        TASK_DEF["Register New\nECS Task Definition"]
+        APP_SPEC["Parse appspec.yml\n(Lifecycle Hooks)"]
+        CREATE_SET["Create NEW\nTask Set (Green)"]
+    end
+
+    subgraph CANARY_PHASE["Canary Phase — Traffic Shifting"]
+        direction TB
+        C10["Step 1: Route 10% Traffic\nto Green Task Set"]
+        WAIT1["Wait Period: 5 min\n(Observation Window)"]
+        CW_CHECK1["CloudWatch Alarm Check\n(Error Rate / Latency / P99)"]
+        C50["Step 2: Route 50% Traffic\nto Green Task Set"]
+        WAIT2["Wait Period: 5 min\n(Observation Window)"]
+        CW_CHECK2["CloudWatch Alarm Check"]
+        C100["Step 3: Route 100% Traffic\nto Green Task Set"]
+    end
+
+    subgraph VALIDATION["Post-Deployment Validation"]
+        E2E["E2E Tests\n(Synthetic Canary)"]
+        PERF["Performance Baseline\nComparison"]
+        FINAL_CW["Final CloudWatch\nAlarm Evaluation"]
+    end
+
+    subgraph SUCCESS["Deployment Success"]
+        TERMINATE["Terminate Old\n(Blue) Task Set"]
+        TAG["Git Tag Release\nv{semver}"]
+        NOTIFY_OK["Notify: Slack + Email\n✅ Deployment Successful"]
+    end
+
+    subgraph ROLLBACK["Automated Rollback"]
+        direction TB
+        RB_TRIGGER["Rollback Triggered\n(Alarm BREACH or Test Failure)"]
+        SHIFT_BACK["Shift 100% Traffic\nback to Blue Task Set"]
+        STOP_GREEN["Stop & Deregister\nGreen Task Set"]
+        RB_NOTIFY["Notify: Slack + Email\n🚨 Rollback Executed"]
+        RB_ISSUE["Create GitHub Issue\n(Automated Incident Report)"]
+    end
+
+    MERGE --> GHA
+    GHA --> HEALTH
+    HEALTH --> SMOKE
+    SMOKE -->|staging pass| APPROVE
+    APPROVE -->|approved| TASK_DEF
+    TASK_DEF --> APP_SPEC
+    APP_SPEC --> CREATE_SET
+    CREATE_SET --> C10
+    C10 --> WAIT1
+    WAIT1 --> CW_CHECK1
+    CW_CHECK1 -->|ALARM OK| C50
+    CW_CHECK1 -->|ALARM BREACH| RB_TRIGGER
+    C50 --> WAIT2
+    WAIT2 --> CW_CHECK2
+    CW_CHECK2 -->|ALARM OK| C100
+    CW_CHECK2 -->|ALARM BREACH| RB_TRIGGER
+    C100 --> E2E
+    E2E --> PERF
+    PERF --> FINAL_CW
+    FINAL_CW -->|ALL OK| TERMINATE
+    FINAL_CW -->|BREACH| RB_TRIGGER
+    TERMINATE --> TAG
+    TAG --> NOTIFY_OK
+
+    RB_TRIGGER --> SHIFT_BACK
+    SHIFT_BACK --> STOP_GREEN
+    STOP_GREEN --> RB_NOTIFY
+    RB_NOTIFY --> RB_ISSUE
+
+    style TRIGGER fill:#1e3a5f,color:#fff,stroke:#4a90d9
+    style PRE fill:#2d6a4f,color:#fff,stroke:#52b788
+    style DEPLOY_INIT fill:#ff9900,color:#000,stroke:#cc7a00
+    style CANARY_PHASE fill:#7b2d8b,color:#fff,stroke:#a855f7
+    style VALIDATION fill:#1a4971,color:#fff,stroke:#4a90d9
+    style SUCCESS fill:#1b4332,color:#fff,stroke:#52b788
+    style ROLLBACK fill:#7f1d1d,color:#fff,stroke:#ef4444
