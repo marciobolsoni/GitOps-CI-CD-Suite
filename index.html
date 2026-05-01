@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GitOps CI/CD Suite — Marcio Bolsoni</title>
+  <meta name="description" content="Production-grade GitOps CI/CD suite on AWS using GitHub Actions, CodeDeploy canary deployments, and Terraform IaC." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0a0f1e; --bg2: #0f1629; --card: #131d35; --border: #1e2d50;
+      --accent: #a78bfa; --accent2: #38bdf8; --accent3: #34d399;
+      --text: #e2e8f0; --muted: #94a3b8;
+    }
+    body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; line-height: 1.6; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    nav { position: fixed; top: 0; width: 100%; background: rgba(10,15,30,0.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--border); z-index: 100; padding: 0 2rem; display: flex; align-items: center; justify-content: space-between; height: 60px; }
+    .nav-logo { font-weight: 700; font-size: 1rem; color: var(--accent); }
+    .nav-links { display: flex; gap: 1.5rem; font-size: 0.875rem; }
+    .nav-links a { color: var(--muted); }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+    .hero { min-height: 100vh; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6rem 2rem 4rem; position: relative; overflow: hidden; }
+    .hero::before { content: ''; position: absolute; top: -200px; right: -200px; width: 600px; height: 600px; background: radial-gradient(circle, rgba(167,139,250,0.08) 0%, transparent 70%); pointer-events: none; }
+    .hero::after { content: ''; position: absolute; bottom: -200px; left: -200px; width: 600px; height: 600px; background: radial-gradient(circle, rgba(56,189,248,0.06) 0%, transparent 70%); pointer-events: none; }
+    .hero-badge { display: inline-flex; align-items: center; gap: 0.5rem; background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.3); border-radius: 999px; padding: 0.35rem 1rem; font-size: 0.8rem; color: var(--accent); margin-bottom: 1.5rem; }
+    .hero h1 { font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; line-height: 1.15; margin-bottom: 1.5rem; }
+    .hero h1 span { background: linear-gradient(135deg, var(--accent), var(--accent2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .hero p { font-size: 1.125rem; color: var(--muted); max-width: 640px; margin: 0 auto 2.5rem; }
+    .hero-btns { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+    .btn { padding: 0.75rem 1.75rem; border-radius: 8px; font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: all 0.2s; display: inline-flex; align-items: center; gap: 0.5rem; }
+    .btn-primary { background: var(--accent); color: #0a0f1e; }
+    .btn-primary:hover { background: #c4b5fd; text-decoration: none; }
+    .btn-outline { border: 1px solid var(--border); color: var(--text); }
+    .btn-outline:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1.5rem; max-width: 900px; margin: 3rem auto 0; }
+    .stat { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; text-align: center; }
+    .stat-value { font-size: 1.5rem; font-weight: 800; color: var(--accent); }
+    .stat-label { font-size: 0.75rem; color: var(--muted); margin-top: 0.25rem; }
+    section { padding: 5rem 2rem; max-width: 1100px; margin: 0 auto; }
+    .section-label { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); margin-bottom: 0.75rem; }
+    .section-title { font-size: clamp(1.5rem, 3vw, 2.25rem); font-weight: 700; margin-bottom: 1rem; }
+    .section-sub { color: var(--muted); max-width: 560px; }
+    .section-header { margin-bottom: 3rem; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; }
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 1.5rem; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 1.75rem; transition: border-color 0.2s; }
+    .card:hover { border-color: var(--accent); }
+    .card-icon { font-size: 2rem; margin-bottom: 1rem; }
+    .card h3 { font-size: 1.1rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .card p { color: var(--muted); font-size: 0.9rem; }
+    .stack-table { width: 100%; border-collapse: collapse; }
+    .stack-table th { text-align: left; padding: 0.75rem 1rem; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); border-bottom: 1px solid var(--border); }
+    .stack-table td { padding: 0.9rem 1rem; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    .stack-table tr:last-child td { border-bottom: none; }
+    .stack-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .tag { display: inline-flex; align-items: center; background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.2); color: var(--accent); padding: 0.2rem 0.6rem; border-radius: 6px; font-size: 0.75rem; font-weight: 600; margin: 0.1rem; }
+    .tag-blue { background: rgba(56,189,248,0.1); border-color: rgba(56,189,248,0.2); color: var(--accent2); }
+    .tag-green { background: rgba(52,211,153,0.1); border-color: rgba(52,211,153,0.2); color: var(--accent3); }
+    .pipeline-step { display: flex; align-items: flex-start; gap: 1.25rem; padding: 1.25rem 0; border-bottom: 1px solid var(--border); }
+    .pipeline-step:last-child { border-bottom: none; }
+    .step-num { width: 32px; height: 32px; border-radius: 50%; background: rgba(167,139,250,0.15); border: 1px solid rgba(167,139,250,0.3); display: flex; align-items: center; justify-content: center; font-size: 0.8rem; font-weight: 700; color: var(--accent); flex-shrink: 0; }
+    .step-name { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.25rem; }
+    .step-desc { color: var(--muted); font-size: 0.85rem; }
+    .canary-bar { display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+    .canary-label { font-size: 0.85rem; font-weight: 600; width: 60px; flex-shrink: 0; }
+    .canary-track { flex: 1; background: var(--border); border-radius: 999px; height: 8px; }
+    .canary-fill { height: 8px; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+    .canary-pct { font-size: 0.8rem; color: var(--muted); width: 40px; text-align: right; flex-shrink: 0; }
+    footer { border-top: 1px solid var(--border); padding: 2.5rem 2rem; text-align: center; color: var(--muted); font-size: 0.875rem; }
+    footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<nav>
+  <span class="nav-logo">🚀 GitOps CI/CD Suite</span>
+  <div class="nav-links">
+    <a href="#pipeline">Pipeline</a>
+    <a href="#features">Features</a>
+    <a href="#canary">Canary</a>
+    <a href="https://github.com/marciobolsoni/GitOps-CI-CD-Suite" target="_blank">GitHub ↗</a>
+  </div>
+</nav>
+<div class="hero">
+  <div style="position:relative;z-index:1;">
+    <div class="hero-badge">⚙️ GitHub Actions · AWS CodeDeploy · Terraform · GitOps</div>
+    <h1>Production-Grade<br/><span>GitOps CI/CD</span> Suite</h1>
+    <p>End-to-end automated delivery pipeline with canary deployments, automated rollbacks, security scanning, and full infrastructure as code — built for high availability and developer velocity.</p>
+    <div class="hero-btns">
+      <a href="https://github.com/marciobolsoni/GitOps-CI-CD-Suite" target="_blank" class="btn btn-primary">View on GitHub →</a>
+      <a href="https://marciobolsoni.cloud" target="_blank" class="btn btn-outline">Portfolio ↗</a>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-value">GitOps</div><div class="stat-label">Single Source of Truth</div></div>
+      <div class="stat"><div class="stat-value">Canary</div><div class="stat-label">Safe Deployments</div></div>
+      <div class="stat"><div class="stat-value">Auto</div><div class="stat-label">Rollback on Alert</div></div>
+      <div class="stat"><div class="stat-value">OIDC</div><div class="stat-label">Keyless Auth to AWS</div></div>
+      <div class="stat"><div class="stat-value">IaC</div><div class="stat-label">100% Terraform</div></div>
+    </div>
+  </div>
+</div>
+<section id="pipeline">
+  <div class="section-header">
+    <div class="section-label">Automation</div>
+    <h2 class="section-title">CI/CD Pipeline Steps</h2>
+    <p class="section-sub">Every commit to main triggers a fully automated, gated delivery pipeline from code to production.</p>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <h3 style="margin-bottom:1.25rem;">Continuous Integration</h3>
+      <div class="pipeline-step"><div class="step-num">1</div><div><div class="step-name">Lint &amp; Test</div><div class="step-desc">Code quality checks, unit tests, and integration tests run on every PR via GitHub Actions.</div></div></div>
+      <div class="pipeline-step"><div class="step-num">2</div><div><div class="step-name">Security Scanning</div><div class="step-desc">Trivy scans container images for CVEs. Checkov validates Terraform for misconfigurations. Snyk checks dependencies.</div></div></div>
+      <div class="pipeline-step"><div class="step-num">3</div><div><div class="step-name">Terraform Plan</div><div class="step-desc">Automated Terraform plan posted as a PR comment, giving reviewers full visibility into infrastructure changes.</div></div></div>
+      <div class="pipeline-step"><div class="step-num">4</div><div><div class="step-name">Container Build</div><div class="step-desc">Docker image built, tagged, and pushed to Amazon ECR. CodeBuild alternative available via buildspec.yml.</div></div></div>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:1.25rem;">Continuous Delivery</h3>
+      <div class="pipeline-step"><div class="step-num">5</div><div><div class="step-name">Staging Deploy</div><div class="step-desc">Push to staging branch triggers cd-staging.yml — full deployment to staging environment.</div></div></div>
+      <div class="pipeline-step"><div class="step-num">6</div><div><div class="step-name">Manual Approval Gate</div><div class="step-desc">Production pipeline requires explicit reviewer approval in GitHub Actions UI before proceeding.</div></div></div>
+      <div class="pipeline-step"><div class="step-num">7</div><div><div class="step-name">Canary Rollout</div><div class="step-desc">AWS CodeDeploy shifts traffic progressively: 10% → 50% → 100%. CloudWatch monitors each phase.</div></div></div>
+      <div class="pipeline-step"><div class="step-num">8</div><div><div class="step-name">Auto Rollback</div><div class="step-desc">If error rate, latency, or CPU breaches thresholds during rollout, CloudWatch alarm triggers automatic rollback.</div></div></div>
+    </div>
+  </div>
+</section>
+<section id="features" style="background: var(--bg2); max-width:100%; padding: 5rem 2rem;">
+  <div style="max-width:1100px; margin:0 auto;">
+    <div class="section-header">
+      <div class="section-label">Capabilities</div>
+      <h2 class="section-title">Key Features</h2>
+      <p class="section-sub">Enterprise-grade DevOps practices applied to a single cohesive suite.</p>
+    </div>
+    <div class="grid-3">
+      <div class="card"><div class="card-icon">🔁</div><h3>GitOps Workflow</h3><p>Git is the single source of truth. All infrastructure and application changes flow through pull requests with full audit trail.</p></div>
+      <div class="card"><div class="card-icon">🔐</div><h3>OIDC Keyless Auth</h3><p>GitHub Actions authenticates to AWS via OIDC — no long-lived credentials stored as secrets. Least-privilege IAM roles enforced.</p></div>
+      <div class="card"><div class="card-icon">🛡️</div><h3>Security by Design</h3><p>Trivy, Checkov, and Snyk run on every build. Vulnerabilities are caught before reaching staging or production.</p></div>
+      <div class="card"><div class="card-icon">☁️</div><h3>AWS CodeDeploy</h3><p>Canary traffic shifting with automated health monitoring at each phase. Instant rollback on alarm breach.</p></div>
+      <div class="card"><div class="card-icon">🏗️</div><h3>Terraform IaC</h3><p>VPC, ECS Fargate, ALB, RDS, and all supporting infrastructure defined in reusable Terraform modules per environment.</p></div>
+      <div class="card"><div class="card-icon">📊</div><h3>Observability</h3><p>Centralized CloudWatch logs, metrics dashboards, and SNS-backed alerting across all environments and deployment phases.</p></div>
+    </div>
+  </div>
+</section>
+<section id="canary">
+  <div class="section-header">
+    <div class="section-label">Deployment Strategy</div>
+    <h2 class="section-title">Canary Deployment &amp; Rollback</h2>
+    <p class="section-sub">Traffic is shifted progressively, giving CloudWatch time to validate each phase before full rollout.</p>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <h3 style="margin-bottom:1.5rem;">Traffic Shifting Phases</h3>
+      <div class="canary-bar"><div class="canary-label">Phase 1</div><div class="canary-track"><div class="canary-fill" style="width:10%"></div></div><div class="canary-pct">10%</div></div>
+      <p style="color:var(--muted);font-size:0.8rem;margin-bottom:1.25rem;">Initial canary slice — validates new version with minimal blast radius.</p>
+      <div class="canary-bar"><div class="canary-label">Phase 2</div><div class="canary-track"><div class="canary-fill" style="width:50%"></div></div><div class="canary-pct">50%</div></div>
+      <p style="color:var(--muted);font-size:0.8rem;margin-bottom:1.25rem;">Half traffic migrated — sustained monitoring of error rate and latency.</p>
+      <div class="canary-bar"><div class="canary-label">Phase 3</div><div class="canary-track"><div class="canary-fill" style="width:100%"></div></div><div class="canary-pct">100%</div></div>
+      <p style="color:var(--muted);font-size:0.8rem;">Full production traffic on new version — deployment complete.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:1.25rem;">Rollback Triggers</h3>
+      <table class="stack-table">
+        <thead><tr><th>Metric</th><th>Threshold</th><th>Action</th></tr></thead>
+        <tbody>
+          <tr><td>HTTP Error Rate</td><td>&gt; 5% (5xx)</td><td><span class="tag">Auto Rollback</span></td></tr>
+          <tr><td>p99 Latency</td><td>&gt; 500ms</td><td><span class="tag">Auto Rollback</span></td></tr>
+          <tr><td>CPU Utilization</td><td>&gt; 80%</td><td><span class="tag">Auto Rollback</span></td></tr>
+          <tr><td>Manual Trigger</td><td>On demand</td><td><span class="tag-green tag">rollback.yml</span></td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top:1rem;color:var(--muted);font-size:0.85rem;">CloudWatch alarms are evaluated throughout each canary phase. Rollbacks complete within seconds of threshold breach.</p>
+    </div>
+  </div>
+</section>
+<section style="background: var(--bg2); max-width:100%; padding: 5rem 2rem;">
+  <div style="max-width:1100px; margin:0 auto;">
+    <div class="section-header">
+      <div class="section-label">AWS Infrastructure</div>
+      <h2 class="section-title">Infrastructure Components</h2>
+      <p class="section-sub">Multi-AZ, high-availability infrastructure managed entirely with Terraform modules.</p>
+    </div>
+    <div class="card">
+      <table class="stack-table">
+        <thead><tr><th>Component</th><th>Service</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Compute</strong></td><td><span class="tag-blue tag">ECS Fargate</span></td><td>Serverless container orchestration — no EC2 to manage</td></tr>
+          <tr><td><strong>Networking</strong></td><td><span class="tag-blue tag">Multi-AZ VPC</span><span class="tag-blue tag">ALB</span></td><td>High-availability network with Application Load Balancer</td></tr>
+          <tr><td><strong>Database</strong></td><td><span class="tag-blue tag">Amazon RDS</span></td><td>Managed relational database with automated backups</td></tr>
+          <tr><td><strong>Deployment</strong></td><td><span class="tag tag">AWS CodeDeploy</span></td><td>Canary traffic shifting and automated rollback</td></tr>
+          <tr><td><strong>Artifacts</strong></td><td><span class="tag-blue tag">Amazon ECR</span><span class="tag-blue tag">S3</span></td><td>Container registry and Terraform remote state storage</td></tr>
+          <tr><td><strong>Monitoring</strong></td><td><span class="tag-green tag">CloudWatch</span><span class="tag-green tag">SNS</span></td><td>Metrics, logs, dashboards, and alert notifications</td></tr>
+          <tr><td><strong>Auth</strong></td><td><span class="tag tag">OIDC / IAM</span></td><td>Keyless GitHub Actions → AWS authentication</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+<section>
+  <div class="section-header">
+    <div class="section-label">Stack</div>
+    <h2 class="section-title">Technologies Used</h2>
+  </div>
+  <div class="grid-3">
+    <div class="card"><div class="card-icon">⚙️</div><h3>GitHub Actions</h3><p>CI workflows, PR checks, manual approval gates, and environment-specific CD pipelines.</p></div>
+    <div class="card"><div class="card-icon">🏗️</div><h3>Terraform</h3><p>All AWS resources defined as reusable modules. Remote state in S3 with DynamoDB locking.</p></div>
+    <div class="card"><div class="card-icon">🚀</div><h3>AWS CodeDeploy</h3><p>Canary deployment orchestration with integrated CloudWatch alarm monitoring.</p></div>
+    <div class="card"><div class="card-icon">🛡️</div><h3>Trivy + Checkov + Snyk</h3><p>Multi-layer security scanning for container images, IaC misconfigurations, and dependency CVEs.</p></div>
+    <div class="card"><div class="card-icon">🐳</div><h3>Docker + ECR</h3><p>Containerized application builds pushed to Amazon Elastic Container Registry.</p></div>
+    <div class="card"><div class="card-icon">📊</div><h3>CloudWatch + SNS</h3><p>Unified observability with automated alerting and rollback triggers based on live metrics.</p></div>
+  </div>
+</section>
+<footer>
+  <p>Built by <a href="https://marciobolsoni.cloud">Marcio Bolsoni</a> · Cloud AWS Developer &amp; Infrastructure Architect</p>
+  <p style="margin-top:0.5rem;"><a href="https://github.com/marciobolsoni/GitOps-CI-CD-Suite">GitHub Repository</a> · <a href="https://marciobolsoni.cloud/projects">Back to Portfolio</a></p>
+</footer>
+</body>
+</html>
